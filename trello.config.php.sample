@@ -1,0 +1,3 @@
+<?php
+$TRELLO_KEY = "";
+$TRELLO_SECRET = "";
