@@ -1,0 +1,280 @@
+<!HTML>
+<html>
+<head>
+<style>
+body {
+    font-family: arial;
+    font-size: 12px;
+}
+#googleConnectLink {
+  display: none;
+}
+#loggedout {
+    text-align: center;
+    font-size: 20px;
+    padding-top: 30px;
+}
+#loggedin { 
+    display: none; 
+}
+
+#header {
+    padding: 4px;
+    border-bottom: 1px solid #000;
+    background: #eee;
+}
+
+#output {
+    padding: 4px;
+}
+
+.card { 
+    display: block; 
+    padding: 2px;
+}
+</style>
+
+
+</head>
+<body>
+<div id="loggedout">
+    <a id="connectLink" href="#">Connect To Trello</a>
+</div>
+<div id="google-loggedout">
+    <button id="googleConnectLink">Connect To Google</button>
+</div>
+
+
+<div id="loggedin">
+    <div id="header">
+        Logged in to as <span id="fullName"></span> 
+        <a id="disconnect" href="#">Log Out</a>
+    </div>
+    
+    <div id="output">Loading...</div>
+</div> 
+
+<script src="http://code.jquery.com/jquery-1.9.1.min.js"></script>
+<script src="https://api.trello.com/1/client.js?key=5bfd4768912735008a4b6cbde11a9156"></script>
+ 
+<script type="text/javascript">
+
+function trelloGet(url) {
+  var deferred = $.Deferred();
+  Trello.get(url, function(response) {
+    deferred.resolve(response);
+  });
+  return deferred.promise();
+}
+
+function googleGet(actix, sceneix, attachix, url) {
+
+  var deferred = $.Deferred();
+
+  var request = gapi.client.request({path: url});
+  request.execute(function(response) {
+
+    downloadPath = undefined;
+    if(response.exportLinks) {
+      downloadPath = response.exportLinks['text/html'];
+    }
+    deferred.resolve(actix, sceneix, attachix, downloadPath);
+  });
+  return deferred.promise();
+}
+
+function documentGet(actix, sceneix, attachix, downloadPath) {
+  var deferred = $.Deferred();
+  $.ajax({url: "download.php", data: { file: downloadPath, accessToken: gapi.auth.getToken().access_token}, success: function(response) {
+    deferred.resolve(actix, sceneix, attachix, response);
+    }
+  });
+  return deferred.promise();
+}
+
+var CLIENT_ID = '43799062301.apps.googleusercontent.com';
+var SCOPES = 'https://www.googleapis.com/auth/drive';
+var drive_enabled = false;
+var trello_enabled = false;
+
+
+var onAuthorize = function() {
+    updateLoggedIn();
+    trello_enabled = true;
+    loadScript();
+};
+var loadScript = function() {
+  if(!trello_enabled || !drive_enabled) {
+    return;
+  }
+
+    var acts = [];
+    $("#output").empty();
+    $.when(trelloGet("/boards/FUhDfqFQ")).then(function(board) {
+      $.when(trelloGet("/boards/" + board.id + "/lists")).then(function(lists) {
+        var deferreds = [];
+        $.each(lists, function(ix, list) {
+          if (list.name.match("^Act I+ Plot$")) {
+            var actIndex = acts.length;
+            acts[actIndex] = {
+              title: "<h1>" + list.name + "</h1>",
+              scenes: []
+            };
+            deferreds[deferreds.length] = trelloGet("/lists/" + list.id + "/cards?attachments_fields=url&attachments=true").then(function(cards) {
+              var contentDeferreds = [];
+              var cix = 0;
+              $.each(cards, function(cardix, card) {
+                if(!card.name.match("^[Mm]usic.*")) {
+                var scene = {
+                  attachments: [],
+                  content: [],
+                  title: "<h3>Scene " + card.name + "</h3>"
+                }
+                if(card.attachments.length > 0) {
+                  for(var a = card.attachments.length - 1; a >= 0; a--) {
+                    scene.attachments[scene.attachments.length] = card.attachments[a].url;
+                  }
+                }
+                acts[actIndex].scenes[cix++] = scene;
+                }
+              });
+            }).then(function() {
+              var gdeferreds = [];
+              $.each(acts[actIndex].scenes, function(sceneix, scene) {
+                if(scene.attachments.length > 0) {
+                  for(var a = 0; a < scene.attachments.length; a++) {
+                    var attachment = scene.attachments[a];
+                    if (attachment.match("docs.google.com")) {
+                      var id = attachment.replace(/https\:\/\/docs.google.com\/document\/d\/(.*)\/edit(?:\?usp=drive_web)?/,"$1");
+                      gdeferreds[gdeferreds.length] = googleGet(actIndex, sceneix, a, "/drive/v2/files/" + id);
+                    } else {
+                      window.console.log("Ignoring attachment " + attachment);
+                    }
+                  }
+                }
+              });
+              return $.when.apply($, gdeferreds).then(function() {
+                var ldeferreds = [];
+                var responses = arguments;
+                if(!Array.isArray(responses[0])) {
+                  responses = [responses];
+                }
+                for(var i = 0; i < responses.length; i++) {
+                  var response = responses[i];
+                  if(response[3]) {
+                    ldeferreds[ldeferreds.length] = documentGet(response[0], response[1], response[2], response[3]).then(function(actix, sceneix, attachix, content) {
+    		      window.console.log("Adding content for " + actix + ":" + sceneix + ":" + attachix);
+window.console.log(response);
+                      acts[actix].scenes[sceneix].content[attachix] = content;
+                    });
+                  }
+                }
+                return $.when.apply($, ldeferreds).then(function() {
+                  window.console.log("Done loading data");
+                });
+              });
+            });
+          }
+        });
+        $.when.apply($, deferreds)
+        .done(function(responses) {
+          render(acts);
+        });
+
+
+      });
+    });
+};
+
+var render = function(acts) {
+  var output = "";
+  $.each(acts, function(actix, act) {
+    output += act.title;
+    var realsceneix = 0;
+    $.each(act.scenes, function(sceneix, scene) {
+      if(scene.content.length > 0) {
+        realsceneix += 1;
+        output += '<h3>Act ' + (actix + 1) + " Scene " + realsceneix + "</h3>";
+        output += '<div class="scene' + (actix + 1) + "-" + realsceneix + '">';
+
+        var outputStyle = false;
+        var nodes = $(scene.content.join("\n"));
+        nodes.each(function(ix, tag) {
+          if (tag.tagName == "STYLE" && !outputStyle) {
+            output += "<style>";
+            output += $(tag).html().replace(/([^{}]*?)({.*?})/g, ".scene" + (actix + 1) + "-" + realsceneix + " $1$2");
+            output += "</style>";
+            outputStyle = true;
+          }
+          else if (tag.tagName != "TITLE" && tag.tagName != "META" && tag.tagName != "STYLE") {
+            output += tag.outerHTML;
+          }
+        });
+        output += "</div><hr />";
+      } else {
+        output += scene.title;
+        for(var a = 0; a < scene.attachments; a++) {
+          output += '<a href="' + scene.attachments[a] + '" target="_attachment">' + scene.attachments[a] + '</a>';
+        }
+        output += '<hr />';
+      }
+    });
+    
+  });
+
+  $('#output').html("<h1>The Metal Queen: Kneel Before Her Dark Majesty</h1><h2>Audition Draft</h2><h3>(c) 2014 Loaded Gun Theory</h3>" + output);
+}
+
+var updateLoggedIn = function() {
+    var isLoggedIn = Trello.authorized();
+    $("#loggedout").toggle(!isLoggedIn);
+    $("#loggedin").toggle(isLoggedIn);        
+};
+    
+var logout = function() {
+    Trello.deauthorize();
+    updateLoggedIn();
+};
+                          
+Trello.authorize({
+    interactive:false,
+    success: onAuthorize
+});
+
+$("#connectLink").click(function(){
+    Trello.authorize({
+        type: "popup",
+        success: onAuthorize
+    })
+});
+    
+$("#disconnect").click(logout);
+
+
+function checkAuth() {
+ gapi.auth.authorize(
+            {'client_id': CLIENT_ID, 'scope': SCOPES, 'immediate': true},
+            handleAuthResult);
+}
+function handleClientLoad() {
+    window.setTimeout(checkAuth, 1);
+}
+function handleAuthResult(authResult) {
+  if (authResult && !authResult.error) {
+    window.console.log("Google Enabled");
+    drive_enabled = true;
+    loadScript();
+  } else {
+   $('#googleConnectLink').click(function() { gapi.auth.authorize(
+            {'client_id': CLIENT_ID, 'scope': SCOPES, 'immediate': false},
+            handleAuthResult); return false;});
+    $('#googleConnectLink').show();
+  }
+}
+</script>
+<script src="https://apis.google.com/js/client.js?onload=handleClientLoad"></script>
+
+  
+</body>
+</html>
+
