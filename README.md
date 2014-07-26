@@ -1,4 +1,4 @@
-Trello Combinator
+trello-combinator
 =================
 
 This is just a simple javascript class that downloads the first google drive attachment off of a bunch of trello cards and combines them into a single document. Useful for writing and keeping snippets
